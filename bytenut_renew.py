@@ -61,29 +61,36 @@ def login_and_renew(sb, account_info):
         print(f"🎯 跳转至目标面板: {panel_url}")
         sb.open(panel_url)
         
-        # 定义标准 XPath 和 CSS 选择器 (告别 :contains 报错)
         extend_button_selector = "//button[contains(., 'Extend Time')]"
-        cf_iframe_selector = "iframe[src*='challenges.cloudflare.com']"
+        cf_iframe_selector = "iframe[src*='cloudflare']"
 
-        # 3. 🎯 核心逻辑：确保页面组件加载完毕
+        # 3. 🎯 严格等待续期按钮
         print("⏳ 正在严格等待核心组件 (续期按钮) 加载...")
         try:
-            # 必须等按钮出现在 DOM 中，最长等 20 秒
             sb.wait_for_element_present(extend_button_selector, timeout=20)
             print("✅ 续期按钮已加载。")
         except Exception:
-            send_telegram_message(f"❌ 账号 {username} | 等待 20 秒后仍未发现续期按钮。可能无需续期或页面加载彻底失败。")
+            send_telegram_message(f"❌ 账号 {username} | 等待 20 秒后仍未发现续期按钮。")
             sb.save_screenshot(f"timeout_no_btn_{username}.png")
             return
 
-        # 将按钮滚动到可视区域居中，这会连带把它上方的 CF 验证码也拉出来
-        sb.scroll_into_view(extend_button_selector)
-        sb.sleep(3) # 给动态生成的 CF iframe 一点加载时间
+        # 居中对齐
+        btn_element = sb.find_element(extend_button_selector)
+        sb.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_element)
+        sb.sleep(2) 
 
-        # 4. 🛡️ 检查并破解 CF 验证码
-        print("🔍 检查是否存在 Cloudflare 验证码...")
-        if sb.is_element_present(cf_iframe_selector):
-            print("🛡️ 捕捉到验证码框，准备模拟点击...")
+        # 4. 🛡️ 强制盯防 CF 验证码 (✨ V11 核心修复区 ✨)
+        print("🔍 检查是否存在 Cloudflare 验证码 (主动死守最多 10 秒)...")
+        cf_exists = False
+        try:
+            # 放弃瞬间快照，改为长达10秒的持续监听
+            sb.wait_for_element_present(cf_iframe_selector, timeout=10)
+            cf_exists = True
+        except Exception:
+            pass
+
+        if cf_exists:
+            print("🛡️ 成功捕捉到延迟加载的验证码框，准备模拟点击...")
             try:
                 sb.uc_gui_click_captcha()
             except:
@@ -92,7 +99,7 @@ def login_and_renew(sb, account_info):
                 except:
                     sb.js_click(cf_iframe_selector)
             
-            print("⏳ 正在等待人机验证 Token...")
+            print("⏳ 正在等待人机验证 Token 生成...")
             cf_passed = False
             for _ in range(15): 
                 sb.sleep(2)
@@ -106,13 +113,12 @@ def login_and_renew(sb, account_info):
             if cf_passed:
                 print("✅ 人机验证已成功通过！")
             else:
-                print("⚠️ 人机验证 Token 获取超时，但将强行尝试点击续期...")
+                print("⚠️ 人机验证 Token 获取超时，将强行尝试点击续期...")
         else:
-            print("ℹ️ 页面中不存在 CF 验证码框，直接跳过验证环节。")
+            print("ℹ️ 10秒内未刷出 CF 验证码，假定本次直接免检通过。")
 
         # 5. 🖱️ 最终点击
         print("🖱️ 正在点击续期按钮...")
-        # 因为使用了标准的 XPath，现在的 js_click 绝对不会再报错了
         sb.js_click(extend_button_selector)
         sb.sleep(6)
         

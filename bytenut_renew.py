@@ -60,26 +60,30 @@ def login_and_renew(sb, account_info):
         # 2. 打开面板页面
         print(f"🎯 跳转至目标面板: {panel_url}")
         sb.open(panel_url)
-        sb.sleep(5)
+        
+        # 定义标准 XPath 和 CSS 选择器 (告别 :contains 报错)
+        extend_button_selector = "//button[contains(., 'Extend Time')]"
+        cf_iframe_selector = "iframe[src*='challenges.cloudflare.com']"
 
-        # 强制向下深层滚动，触发懒加载组件
-        print("📜 正在向下滚动页面以触发所有组件加载...")
-        sb.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.8);")
-        sb.sleep(4)
-
-        # 3. 🛡️ 柔性处理 CF 验证码
-        cf_iframe_selector = 'iframe[src*="cloudflare"]'
-        extend_button_selector = 'button:contains("Extend Time")'
-
-        print("🔍 查找 Cloudflare 验证码组件 (最多等待10秒)...")
+        # 3. 🎯 核心逻辑：确保页面组件加载完毕
+        print("⏳ 正在严格等待核心组件 (续期按钮) 加载...")
         try:
-            sb.wait_for_element_present(cf_iframe_selector, timeout=10)
-            
-            cf_element = sb.find_element(cf_iframe_selector)
-            sb.execute_script("arguments[0].scrollIntoView({block: 'center'});", cf_element)
-            sb.sleep(2)
-            
-            print("🛡️ 捕捉到验证码框，尝试模拟点击...")
+            # 必须等按钮出现在 DOM 中，最长等 20 秒
+            sb.wait_for_element_present(extend_button_selector, timeout=20)
+            print("✅ 续期按钮已加载。")
+        except Exception:
+            send_telegram_message(f"❌ 账号 {username} | 等待 20 秒后仍未发现续期按钮。可能无需续期或页面加载彻底失败。")
+            sb.save_screenshot(f"timeout_no_btn_{username}.png")
+            return
+
+        # 将按钮滚动到可视区域居中，这会连带把它上方的 CF 验证码也拉出来
+        sb.scroll_into_view(extend_button_selector)
+        sb.sleep(3) # 给动态生成的 CF iframe 一点加载时间
+
+        # 4. 🛡️ 检查并破解 CF 验证码
+        print("🔍 检查是否存在 Cloudflare 验证码...")
+        if sb.is_element_present(cf_iframe_selector):
+            print("🛡️ 捕捉到验证码框，准备模拟点击...")
             try:
                 sb.uc_gui_click_captcha()
             except:
@@ -90,7 +94,7 @@ def login_and_renew(sb, account_info):
             
             print("⏳ 正在等待人机验证 Token...")
             cf_passed = False
-            for _ in range(12): 
+            for _ in range(15): 
                 sb.sleep(2)
                 response_field = 'input[name="cf-turnstile-response"]'
                 if sb.is_element_present(response_field):
@@ -100,37 +104,20 @@ def login_and_renew(sb, account_info):
                         break
             
             if cf_passed:
-                print("✅ 人机验证已成功！")
+                print("✅ 人机验证已成功通过！")
             else:
-                print("⚠️ Token 获取超时，将继续尝试点击续期...")
-                
-        except Exception:
-            print("⚠️ 未找到可见的 CF 验证码框。可能被直接放行，准备直接点击续期...")
+                print("⚠️ 人机验证 Token 获取超时，但将强行尝试点击续期...")
+        else:
+            print("ℹ️ 页面中不存在 CF 验证码框，直接跳过验证环节。")
 
-        # 4. 点击续期 (✨ V9 核心修复区 ✨)
-        print("🔍 查找并点击续期按钮...")
-        try:
-            # 等待按钮出现在源码中
-            sb.wait_for_element_present(extend_button_selector, timeout=10)
-            # 获取元素的实体对象
-            btn_element = sb.find_element(extend_button_selector)
-            
-            # 将实体对象滚动到中心
-            sb.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn_element)
-            sb.sleep(2)
-            
-            print("🖱️ 针对元素实体发起原生 JS 点击...")
-            # 避开选择器解析，直接让浏览器点击这个实体对象
-            sb.execute_script("arguments[0].click();", btn_element)
-            sb.sleep(6)
-            
-            send_telegram_message(f"✅ 账号 {username} | 续期点击指令执行完毕！")
-            sb.save_screenshot(f"success_final_{username}.png")
-            
-        except Exception as e:
-            send_telegram_message(f"❌ 账号 {username} | 找不到续期按钮。")
-            sb.save_screenshot(f"no_btn_{username}.png")
-            print(f"详细错误: {e}")
+        # 5. 🖱️ 最终点击
+        print("🖱️ 正在点击续期按钮...")
+        # 因为使用了标准的 XPath，现在的 js_click 绝对不会再报错了
+        sb.js_click(extend_button_selector)
+        sb.sleep(6)
+        
+        send_telegram_message(f"✅ 账号 {username} | 续期指令执行完毕！")
+        sb.save_screenshot(f"success_final_{username}.png")
 
     except Exception as e:
         error_screenshot = f"error_{username}_{int(time.time())}.png"

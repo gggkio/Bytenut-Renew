@@ -1,23 +1,19 @@
 name: Bytenut-Renew
+
 on:
   workflow_dispatch:
   schedule:
+    # 每天 UTC 时间 5:00 执行 (北京时间 13:00)
     - cron: '0 5 * * *'
 
 jobs:
   run_bytenut_renew:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    
     steps:
-      - name: 📥 下载私库脚本
+      - name: 📥 检出当前代码
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/Bytenut-Renew-Private
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          path: private
-
-      - name: 📂 移动脚本到工作目录
-        run: mv private/bytenut_renew.py bytenut_renew.py
 
       - name: 🐍 设置 Python
         uses: actions/setup-python@v5
@@ -36,7 +32,7 @@ jobs:
 
       - name: 🐍 安装 Python 依赖
         run: |
-          pip install seleniumbase
+          pip install seleniumbase requests
           seleniumbase install chromedriver
 
       - name: 🛡️ 启动 GOST 代理转发
@@ -60,9 +56,11 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
           BYTENUT_ACCOUNTS: ${{ secrets.BYTENUT_ACCOUNTS }}
+          BYTENUT_COOKIES: ${{ secrets.BYTENUT_COOKIES }}
           GOST_PROXY: ${{ secrets.GOST_PROXY }}
           TG_BOT: ${{ secrets.TG_BOT }}
         run: |
+          # 使用 xvfb 虚拟显示器运行脚本
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python bytenut_renew.py
 
       - name: 📸 上传调试截图
@@ -72,3 +70,4 @@ jobs:
           name: debug-screenshots-${{ github.run_id }}
           path: "*.png"
           retention-days: 3
+          include-hidden-files: false

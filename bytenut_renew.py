@@ -2,6 +2,7 @@ import os
 import json
 import time
 import requests
+from datetime import datetime
 from seleniumbase import SB
 
 # ================= 配置与环境变量解析 =================
@@ -18,7 +19,8 @@ USE_PROXY = os.environ.get('GOST_PROXY') != ''
 PROXY_STR = "http://127.0.0.1:8080" if USE_PROXY else None
 
 def send_telegram_message(message):
-    print(message)
+    print("\n📣 准备发送 Telegram 汇总通知...")
+    print(message.replace('<b>', '').replace('</b>', '').replace('<i>', '').replace('</i>', '')) # 控制台打印去标签版
     if not TG_BOT or ',' not in TG_BOT:
         return
     try:
@@ -26,6 +28,7 @@ def send_telegram_message(message):
         url = f"https://api.telegram.org/bot{token.strip()}/sendMessage"
         payload = {"chat_id": chat_id.strip(), "text": message, "parse_mode": "HTML"}
         requests.post(url, json=payload, timeout=10)
+        print("✅ Telegram 通知发送成功！")
     except Exception as e:
         print(f"⚠️ Telegram 消息发送失败: {e}")
 
@@ -36,7 +39,9 @@ def login_and_renew(sb, account_info):
     password = account_info.get('password')
     panel_url = account_info.get('panel_url')
     
-    send_telegram_message(f"🔄 开始处理账号: <b>{username}</b>")
+    print(f"\n======================================")
+    print(f"🔄 开始处理账号: {username}")
+    print(f"======================================")
 
     try:
         # 1. 登录
@@ -49,20 +54,19 @@ def login_and_renew(sb, account_info):
         sb.sleep(8) 
 
         if "/auth/login" in sb.get_current_url():
-            send_telegram_message(f"❌ 账号 {username} 密码登录失败。")
+            print(f"❌ 账号 {username} 密码登录失败。")
             sb.save_screenshot(f"login_failed_{username}.png")
-            return
+            return f"❌ <b>{username}</b> : 登录失败 (账号密码错误或被拦截)"
 
         if not panel_url:
             print("⚠️ 缺少 panel_url 配置。")
-            return
+            return f"⚠️ <b>{username}</b> : 缺少面板配置"
 
         # 2. 打开面板页面
         print(f"🎯 跳转至目标面板: {panel_url}")
         sb.open(panel_url)
         sb.sleep(4)
 
-        # 🛑 尝试清理底部隐私横幅，扫清障碍
         print("🧹 尝试清理底部隐私横幅...")
         js_remove_banner = """
         var btns = document.querySelectorAll('button');
@@ -76,77 +80,67 @@ def login_and_renew(sb, account_info):
         sb.execute_script(js_remove_banner)
         sb.sleep(1)
 
-        # =========================================================
-        # 🛡️ 第一阶段：按照大神逻辑，优先处理 CF 验证码
-        # =========================================================
-        print("🔍 [步骤1] 等待页面加载 CF 验证码底层组件...")
-        # 只要有 CF 验证，页面必定会注入这个名字的 input 用来存 token
+        # 3. 🛡️ 优先处理 CF 验证码
+        print("🔍 等待页面加载 CF 验证码底层组件...")
         response_field = 'input[name="cf-turnstile-response"]'
 
         try:
             sb.wait_for_element_present(response_field, timeout=20)
         except Exception:
-            print("⚠️ 20秒内未发现 CF 底层组件。可能页面加载失败，或完全免检。")
+            print("⚠️ 20秒内未发现 CF 底层组件。")
 
         cf_passed = False
 
         if sb.is_element_present(response_field):
-            # 检查是否是 CF “隐形秒过” 模式
             initial_token = sb.get_attribute(response_field, "value")
             if initial_token and len(initial_token) > 10:
-                print("✅ 欧皇附体！CF 隐形验证已自动秒过，无需点击。")
+                print("✅ 隐形验证自动秒过。")
                 cf_passed = True
             else:
-                print("🛡️ 需要手动点击验证。正在将验证码滚动到屏幕正中央...")
-                # 核心修复：精准滚动到验证码的父级容器，而不是滚动续期按钮
+                print("🛡️ 需要点击验证，正在居中...")
                 sb.execute_script(f"""
                     var ele = document.querySelector('{response_field}');
                     if(ele && ele.parentElement) {{ ele.parentElement.scrollIntoView({{block: 'center'}}); }}
                 """)
-                sb.sleep(2) # 留出物理坐标稳定和 iframe 渲染的时间
+                sb.sleep(2) 
 
-                # 寻找 CF 的框 (采用最广义的选择器)
                 cf_iframe = "iframe[src*='cloudflare'], iframe[title*='Cloudflare'], iframe[src*='turnstile'], iframe"
                 if sb.is_element_present(cf_iframe):
-                    print("🖱️ 正在对 CF 验证框执行物理级模拟鼠标点击...")
+                    print("🖱️ 对 CF 验证框执行模拟点击...")
                     try:
                         sb.uc_gui_click_captcha()
                     except:
                         try:
                             sb.uc_click(cf_iframe)
                         except Exception as e:
-                            print(f"⚠️ 点击指令执行遇阻，但可能已触发: {e}")
+                            print(f"⚠️ 点击异常: {e}")
 
-                print("⏳ 正在死守人机验证 Token (等待绿勾生成，最多 30 秒)...")
+                print("⏳ 正在死守人机验证 Token (最多 30 秒)...")
                 for i in range(15):
                     sb.sleep(2)
                     token = sb.get_attribute(response_field, "value")
                     if token and len(token) > 10:
                         cf_passed = True
-                        print(f"✅ 第 {i*2 + 2} 秒，成功截获 Token！CF 验证完美通关！")
+                        print(f"✅ 第 {i*2 + 2} 秒，验证通关！")
                         break
 
-        # 拦截：如果确实有验证码，但死活没通过，直接终止，绝不瞎点按钮
         if sb.is_element_present(response_field) and not cf_passed:
-            send_telegram_message(f"❌ 账号 {username} | 人机验证超时未通过，为防封控已终止操作。")
+            print(f"❌ 人机验证超时。")
             sb.save_screenshot(f"cf_fail_{username}.png")
-            return
+            return f"❌ <b>{username}</b> : CF人机验证失败/超时"
 
-        # =========================================================
-        # 🎯 第二阶段：验证通关后，再去找按钮点击
-        # =========================================================
+        # 4. 🎯 验证通关后，寻找并点击按钮
         extend_button_xpath = "//button[contains(., 'Extend Time')]"
-        print("🔍 [步骤2] 验证已完成，正在寻找并点击续期按钮...")
+        print("🔍 验证已完成，寻找续期按钮...")
 
         try:
             sb.wait_for_element_present(extend_button_xpath, timeout=10)
         except Exception:
-            send_telegram_message(f"❌ 账号 {username} | 验证已过，但未找到续期按钮。")
+            print(f"❌ 验证已过，未找到续期按钮。")
             sb.save_screenshot(f"no_btn_{username}.png")
-            return
+            return f"❌ <b>{username}</b> : 未找到续期按钮 (可能冷却中)"
 
-        print("🖱️ 正在对续期按钮执行终极点击...")
-        # 此时再把续期按钮滚动过来
+        print("🖱️ 对续期按钮执行终极点击...")
         sb.execute_script(f"""
             var ele = document.evaluate("{extend_button_xpath}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
             if(ele) {{ ele.scrollIntoView({{block: 'center'}}); }}
@@ -155,22 +149,42 @@ def login_and_renew(sb, account_info):
         sb.js_click(extend_button_xpath)
         sb.sleep(6)
         
-        send_telegram_message(f"✅ 账号 {username} | 完美！续期请求已发送！")
+        print(f"✅ 完美！续期请求已发送！")
         sb.save_screenshot(f"success_final_{username}.png")
+        return f"✅ <b>{username}</b> : 续期成功！"
 
     except Exception as e:
         error_screenshot = f"error_{username}_{int(time.time())}.png"
         sb.save_screenshot(error_screenshot)
-        send_telegram_message(f"❌ 账号 {username} 发生异常: {str(e)[:100]}")
+        print(f"❌ 异常: {str(e)[:100]}")
+        return f"❌ <b>{username}</b> : 执行异常 ({str(e)[:20]}...)"
 
 def main():
     if not ACCOUNTS:
+        print("未配置账号。")
         return
+
+    # 初始化汇总报告的头部
+    report_lines = [
+        "<b>🤖 Bytenut 批量续期报告</b>",
+        "━━━━━━━━━━━━━━━━━━"
+    ]
 
     with SB(uc=True, headless=False, proxy=PROXY_STR) as sb:
         for account in ACCOUNTS:
-            login_and_renew(sb, account)
-            sb.sleep(3)
+            # 拿到每个账号的单行状态字符串
+            status_line = login_and_renew(sb, account)
+            report_lines.append(status_line)
+            sb.sleep(3) # 账号间缓冲
+
+    # 报告尾部追加当前 UTC 时间
+    report_lines.append("━━━━━━━━━━━━━━━━━━")
+    now_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    report_lines.append(f"⏱ <i>执行时间: {now_utc}</i>")
+
+    # 拼接并发送最终报告
+    final_message = "\n".join(report_lines)
+    send_telegram_message(final_message)
 
 if __name__ == "__main__":
     main()
